@@ -6,4 +6,5 @@ langchain-huggingface
 langchain-chroma
 langchain-groq
 pymupdf
+transformers<5
 sentence-transformers
