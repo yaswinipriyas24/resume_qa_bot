@@ -24,7 +24,7 @@ def build_vector_store(pdf_path: str):
     documents = loader.load()
     
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
+        chunk_size=400,
         chunk_overlap=100
     )
     chunks = text_splitter.split_documents(documents)
@@ -38,26 +38,41 @@ def build_vector_store(pdf_path: str):
     )
     return vector_store
 
-def format_docs(docs):
-    """Combines retrieved document chunks into a single string context."""
-    return "\n\n".join(doc.page_content for doc in docs)
+def format_docs_with_header(docs):
+    """Combines retrieved chunks AND always injects the top of Page 1 (contact info) into context."""
+    retrieved_text = "\n\n".join(doc.page_content for doc in docs)
+    
+    # Always grab Page 1 text if available so contact info, email, and summary are never missed
+    header_text = ""
+    if os.path.exists("temp_resume.pdf"):
+        try:
+            loader = PyMuPDFLoader("temp_resume.pdf")
+            pages = loader.load()
+            if pages:
+                header_text = "--- CANDIDATE CONTACT & HEADER INFO ---\n" + pages[0].page_content + "\n----------------------------------------\n\n"
+        except Exception:
+            pass
+            
+    return header_text + retrieved_text
 
 def get_qa_chain():
-    """Initializes and returns the RAG pipeline that outputs both answer and sources."""
+    """Initializes and returns the RAG pipeline with guaranteed contact info injection."""
     embeddings = get_embedding_model()
     
     vector_store = Chroma(
         persist_directory="./chroma_db",
         embedding_function=embeddings
     )
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    retriever = vector_store.as_retriever(search_kwargs={"k": 4})
     
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise ValueError("GROQ_API_KEY is missing! Please check your .env file.")
         
+    model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model=model_name,
         temperature=0.2,
         groq_api_key=api_key
     )
@@ -72,9 +87,8 @@ def get_qa_chain():
     
     prompt = ChatPromptTemplate.from_template(system_prompt)
     
-    # Modern LCEL parallel chain that returns {"answer": ..., "source_documents": ...}
     retrieval_setup = RunnableParallel(
-        context=retriever | format_docs,
+        context=retriever | format_docs_with_header,
         input=RunnablePassthrough(),
         source_documents=retriever
     )

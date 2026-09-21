@@ -38,14 +38,17 @@ if "messages" not in st.session_state:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        # If stored message has sources, render them in history as well
-        if "sources" in message:
+        # If stored message has sources, render them in history with deduplication
+        if "sources" in message and message["sources"]:
             with st.expander("🔍 View Source Citations & Page Numbers"):
-                for i, doc in enumerate(message["sources"]):
-                    page_num = doc.metadata.get("page", 0) + 1  # PyMuPDF is 0-indexed
-                    st.markdown(f"**Source {i+1} (Page {page_num})**")
-                    st.text(doc.page_content)
-                    st.divider()
+                seen_texts = set()
+                for doc in message["sources"]:
+                    if doc.page_content not in seen_texts:
+                        seen_texts.add(doc.page_content)
+                        page_num = doc.metadata.get("page", 0) + 1  # PyMuPDF is 0-indexed
+                        st.markdown(f"**Source (Page {page_num})**")
+                        st.text(doc.page_content)
+                        st.divider()
 
 # User Query Input
 if user_query := st.chat_input("Ask a question (e.g., 'What projects were built with Python?'):"):
@@ -70,14 +73,17 @@ if user_query := st.chat_input("Ask a question (e.g., 'What projects were built 
                 
                 st.markdown(response_text)
                 
-                # Display Source Citations directly under the new message
+                # Display Unique Source Citations directly under the new message
                 if response_sources:
                     with st.expander("🔍 View Source Citations & Page Numbers"):
-                        for i, doc in enumerate(response_sources):
-                            page_num = doc.metadata.get("page", 0) + 1
-                            st.markdown(f"**Source {i+1} (Page {page_num})**")
-                            st.text(doc.page_content)
-                            st.divider()
+                        seen_texts = set()
+                        for doc in response_sources:
+                            if doc.page_content not in seen_texts:
+                                seen_texts.add(doc.page_content)
+                                page_num = doc.metadata.get("page", 0) + 1
+                                st.markdown(f"**Source (Page {page_num})**")
+                                st.text(doc.page_content)
+                                st.divider()
                 
     # Save response and sources to session history
     st.session_state.messages.append({

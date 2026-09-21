@@ -3,3 +3,6 @@ venv/
 __pycache__/
 chroma_db/
 temp_resume.pdf
+pip_transformers.*
+streamlit_diagnostic.*
+rag_diagnostic.*
