@@ -2,7 +2,7 @@ import os
 import warnings
 import shutil
 import streamlit as st
-from backend import build_vector_store, get_conversational_qa_chain, analyze_job_match
+from backend import build_vector_store, get_conversational_qa_chain, analyze_job_match, tailor_resume_to_jd
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*is part of.*but not documented.*")
@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore", message=".*is part of.*but not documented.*")
 st.set_page_config(page_title="Advanced AI Resume & ATS Bot", page_icon="💼", layout="centered")
 
 st.title("💼 Advanced AI Resume & Portfolio System")
-st.write("Chat with conversation memory, switch personas, or run an interactive ATS gap-match!")
+st.write("Chat with conversation memory, switch personas, or run an interactive ATS gap-match & auto-tailor!")
 
 # Sidebar for Multi-Document Upload & Settings
 with st.sidebar:
@@ -50,10 +50,9 @@ with st.sidebar:
     )
 
 # Navigation Tabs
-tab1, tab2 = st.tabs(["💬 Interactive Q&A Bot", "🎯 Interactive Skills & Gap-Matcher"])
+tab1, tab2 = st.tabs(["💬 Interactive Q&A Bot", "🎯 Skills Gap-Matcher & Auto-Tailor"])
 
 with tab1:
-    # Initialize simple string-based conversation history for safe embedding processing
     if "chat_history_text" not in st.session_state:
         st.session_state.chat_history_text = ""
 
@@ -62,7 +61,6 @@ with tab1:
             {"role": "assistant", "content": "Hello! Ask me anything about the candidate's background or projects."}
         ]
 
-    # Display Chat History UI
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -77,7 +75,6 @@ with tab1:
                             st.text(doc.page_content)
                             st.divider()
 
-    # User Query Input
     if user_query := st.chat_input("Ask a question:"):
         st.session_state.messages.append({"role": "user", "content": user_query})
         with st.chat_message("user"):
@@ -92,7 +89,6 @@ with tab1:
                 with st.spinner(f"Analyzing in {persona_mode}..."):
                     qa_chain = get_conversational_qa_chain(persona_mode=persona_mode)
                     
-                    # Pass chat history safely as a formatted text block
                     result = qa_chain.invoke({
                         "input": user_query,
                         "chat_history": st.session_state.chat_history_text
@@ -114,7 +110,6 @@ with tab1:
                                     st.text(doc.page_content)
                                     st.divider()
                     
-        # Update text-based history log
         st.session_state.chat_history_text += f"\nHuman: {user_query}\nAI: {response_text}\n"
         
         st.session_state.messages.append({
@@ -124,8 +119,8 @@ with tab1:
         })
 
 with tab2:
-    st.header("🎯 Interactive Skills & Job Gap-Matcher")
-    st.write("Paste a target Job Description and optionally specify a focal skill to analyze alignment.")
+    st.header("🎯 Interactive Skills & Job Gap-Matcher & Auto-Tailor")
+    st.write("Paste a target Job Description to analyze match score, identify gaps, and automatically rewrite your resume for this role.")
     
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -133,10 +128,10 @@ with tab2:
     with col2:
         target_skill_filter = st.selectbox(
             "Interactive Skill Focus",
-            ["None (General Match)", "Python", "SQL", "Tableau / Power BI", "Machine Learning / NLP", "FastAPI / React"]
+            ["None (General Match)", "Python", "SQL", "Tableau / Power BI", "Machine Learning / NLP", "SAP BTP / Teaching"]
         )
     
-    if st.button("Run Gap-Match Analysis"):
+    if st.button("Run ATS Gap-Match & Analysis"):
         if not os.path.exists("./chroma_db"):
             st.warning("Please upload and index your documents in the sidebar first!")
         elif not jd_input.strip():
@@ -145,11 +140,41 @@ with tab2:
             skill_query = "" if "None" in target_skill_filter else target_skill_filter
             with st.spinner("Evaluating candidate fit and skill alignment..."):
                 analysis_report, jd_sources = analyze_job_match(jd_input, target_skill=skill_query)
-                st.markdown("### 📊 Skill Gap & ATS Report")
-                st.markdown(analysis_report)
+                st.session_state["last_jd"] = jd_input
+                st.session_state["last_skill"] = skill_query
+                st.session_state["analysis_report"] = analysis_report
+                st.session_state["jd_sources"] = jd_sources
                 
-                with st.expander("🔍 View Relevant Resume Chunks"):
-                    for i, doc in enumerate(jd_sources):
-                        st.markdown(f"**Match Chunk {i+1}**")
-                        st.text(doc.page_content)
-                        st.divider()
+    if "analysis_report" in st.session_state:
+        st.markdown("### 📊 Skill Gap & ATS Report")
+        st.markdown(st.session_state["analysis_report"])
+        
+        with st.expander("🔍 View Relevant Resume Chunks"):
+            for i, doc in enumerate(st.session_state["jd_sources"]):
+                st.markdown(f"**Match Chunk {i+1}**")
+                st.text(doc.page_content)
+                st.divider()
+                
+        st.divider()
+        st.subheader("✨ Automatic Resume Tailor & Download")
+        st.write("Satisfied with the job target? Click below to generate an ATS-optimized version of your resume tailored precisely for this position.")
+        
+        if st.button("🚀 Generate Tailored Resume"):
+            with st.spinner("Rewriting and optimizing resume content for maximum ATS compatibility..."):
+                tailored_resume_text = tailor_resume_to_jd(
+                    st.session_state["last_jd"], 
+                    target_skill=st.session_state["last_skill"]
+                )
+                st.session_state["tailored_resume"] = tailored_resume_text
+                st.success("Resume successfully tailored!")
+                
+        if "tailored_resume" in st.session_state:
+            st.markdown("### 📄 Tailored Resume Preview")
+            st.markdown(st.session_state["tailored_resume"])
+            
+            st.download_button(
+                label="📥 Download Tailored Resume (.md / .txt)",
+                data=st.session_state["tailored_resume"],
+                file_name="tailored_resume_optimized.md",
+                mime="text/markdown"
+            )

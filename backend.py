@@ -18,6 +18,7 @@ def get_embedding_model():
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 def build_vector_store(file_paths: list):
+    """Loads multiple documents, chunks text, and stores vectors in ChromaDB."""
     all_documents = []
     for path in file_paths:
         if path.endswith(".pdf"):
@@ -42,6 +43,7 @@ def build_vector_store(file_paths: list):
     return vector_store
 
 def format_docs_with_header(docs):
+    """Appends candidate header contact info to ensure personal details are never missed."""
     retrieved_text = "\n\n".join(doc.page_content for doc in docs)
     header_text = ""
     if os.path.exists("temp_resume.pdf"):
@@ -55,7 +57,7 @@ def format_docs_with_header(docs):
     return header_text + retrieved_text
 
 def retrieve_docs(inputs):
-    """Safely extracts the query string from dictionary inputs before embedding search."""
+    """Safely extracts query strings from dictionary inputs before executing vector search."""
     query = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
     embeddings = get_embedding_model()
     vector_store = Chroma(
@@ -66,7 +68,7 @@ def retrieve_docs(inputs):
     return retriever.invoke(query)
 
 def get_conversational_qa_chain(persona_mode="Recruiter Mode"):
-    """Returns a robust LCEL RAG chain supporting conversation history and personas without dictionary errors."""
+    """Returns a robust conversational RAG chain supporting history and personas."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise ValueError("GROQ_API_KEY is missing! Please check your .env file.")
@@ -90,7 +92,6 @@ def get_conversational_qa_chain(persona_mode="Recruiter Mode"):
     
     prompt = ChatPromptTemplate.from_template(system_prompt)
     
-    # Use explicit Python functions for retrieval to prevent dict embedding errors
     retrieval_setup = RunnableParallel(
         context=lambda x: format_docs_with_header(retrieve_docs(x)),
         input=itemgetter("input"),
@@ -146,3 +147,40 @@ def analyze_job_match(job_description: str, target_skill: str = ""):
     
     response = llm.invoke(analysis_prompt)
     return response.content, matched_docs
+
+def tailor_resume_to_jd(job_description: str, target_skill: str = ""):
+    """Optimizes and rewrites resume content to match target JD requirements."""
+    embeddings = get_embedding_model()
+    vector_store = Chroma(
+        persist_directory="./chroma_db",
+        embedding_function=embeddings
+    )
+    
+    search_query = job_description
+    if target_skill:
+        search_query += f" highlighting experience with {target_skill}"
+        
+    retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    matched_docs = retriever.invoke(search_query)
+    context = "\n\n".join(doc.page_content for doc in matched_docs)
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    llm = ChatGroq(
+        model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+        temperature=0.2,
+        groq_api_key=api_key
+    )
+    
+    tailor_prompt = (
+        "You are an expert Resume Writer and ATS Optimization Specialist.\n"
+        "Your task is to rewrite and optimize the candidate's resume content below so it perfectly matches and addresses "
+        "every key requirement, tech stack item, and responsibility listed in the target Job Description.\n"
+        "Keep the factual data, projects, and education authentic, but phrase bullet points and summaries "
+        "to maximize ATS keyword matching for this specific role.\n\n"
+        f"Target Job Description:\n{job_description}\n\n"
+        f"Original Candidate Resume Context:\n{context}\n\n"
+        "Provide a professionally formatted, fully tailored version of the resume ready for download."
+    )
+    
+    response = llm.invoke(tailor_prompt)
+    return response.content
