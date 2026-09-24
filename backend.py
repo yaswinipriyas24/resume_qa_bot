@@ -13,15 +13,12 @@ from langchain_core.prompts import ChatPromptTemplate
 
 load_dotenv()
 
-# Cache embedding model so Streamlit UI doesn't freeze on startup
 @st.cache_resource
 def get_embedding_model():
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 def build_vector_store(file_paths: list):
-    """Loads multiple documents (PDF resumes or TXT project reports), chunks text, and stores in ChromaDB."""
     all_documents = []
-    
     for path in file_paths:
         if path.endswith(".pdf"):
             loader = PyMuPDFLoader(path)
@@ -35,7 +32,6 @@ def build_vector_store(file_paths: list):
         chunk_overlap=100
     )
     chunks = text_splitter.split_documents(all_documents)
-    
     embeddings = get_embedding_model()
     
     vector_store = Chroma.from_documents(
@@ -58,78 +54,74 @@ def format_docs_with_header(docs):
             pass
     return header_text + retrieved_text
 
-def get_qa_chain(persona_mode="Recruiter Mode"):
-    """Initializes and returns the RAG pipeline customized by persona."""
+def retrieve_docs(inputs):
+    """Safely extracts the query string from dictionary inputs before embedding search."""
+    query = inputs.get("input", "") if isinstance(inputs, dict) else str(inputs)
     embeddings = get_embedding_model()
-    
     vector_store = Chroma(
         persist_directory="./chroma_db",
         embedding_function=embeddings
     )
     retriever = vector_store.as_retriever(search_kwargs={"k": 4})
-    
+    return retriever.invoke(query)
+
+def get_conversational_qa_chain(persona_mode="Recruiter Mode"):
+    """Returns a robust LCEL RAG chain supporting conversation history and personas without dictionary errors."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise ValueError("GROQ_API_KEY is missing! Please check your .env file.")
         
     model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-    
-    llm = ChatGroq(
-        model=model_name,
-        temperature=0.2,
-        groq_api_key=api_key
-    )
+    llm = ChatGroq(model=model_name, temperature=0.2, groq_api_key=api_key)
     
     if persona_mode == "Recruiter Mode":
-        persona_instructions = (
-            "You are an AI assistant helping a recruiter quickly understand the candidate's background.\n"
-            "Summarize achievements concisely using professional, business-friendly language."
-        )
+        persona_instructions = "You are an AI assistant helping a recruiter quickly understand the candidate's background concisely."
     else:
-        persona_instructions = (
-            "You are an AI technical co-pilot representing the candidate in a technical interview.\n"
-            "Provide deep technical details regarding code architectures, algorithms, hyperparameters, frameworks, and data pipelines."
-        )
+        persona_instructions = "You are an AI technical co-pilot representing the candidate in a technical interview with deep technical architectural details."
         
     system_prompt = (
         f"{persona_instructions}\n"
-        "Answer questions accurately using ONLY the context provided below.\n"
+        "Answer questions accurately using ONLY the context provided below and the ongoing chat history.\n"
         "If the answer is not contained in the context, state that clearly.\n\n"
         "Context:\n{context}\n\n"
-        "Question: {input}"
+        "Previous Chat History:\n{chat_history}\n\n"
+        "Current Question: {input}"
     )
     
     prompt = ChatPromptTemplate.from_template(system_prompt)
     
+    # Use explicit Python functions for retrieval to prevent dict embedding errors
     retrieval_setup = RunnableParallel(
-        context=retriever | format_docs_with_header,
-        input=RunnablePassthrough(),
-        source_documents=retriever
+        context=lambda x: format_docs_with_header(retrieve_docs(x)),
+        input=itemgetter("input"),
+        chat_history=itemgetter("chat_history"),
+        source_documents=retrieve_docs
     )
     
     rag_chain = (
         retrieval_setup
         | RunnableParallel(
-            answer={
-                "context": itemgetter("context"),
-                "input": itemgetter("input")
-            } | prompt | llm | StrOutputParser(),
+            answer=prompt | llm | StrOutputParser(),
             source_documents=itemgetter("source_documents")
         )
     )
     
     return rag_chain
 
-def analyze_job_match(job_description: str):
-    """Compares the resume database against a Job Description to evaluate fit and missing skills."""
+def analyze_job_match(job_description: str, target_skill: str = ""):
+    """Performs an advanced ATS match and highlights how specific interactive skills align."""
     embeddings = get_embedding_model()
     vector_store = Chroma(
         persist_directory="./chroma_db",
         embedding_function=embeddings
     )
-    # Retrieve relevant resume chunks matching the job description requirements
+    
+    search_query = job_description
+    if target_skill:
+        search_query += f" specifically highlighting experience with {target_skill}"
+        
     retriever = vector_store.as_retriever(search_kwargs={"k": 5})
-    matched_docs = retriever.invoke(job_description)
+    matched_docs = retriever.invoke(search_query)
     context = "\n\n".join(doc.page_content for doc in matched_docs)
     
     api_key = os.getenv("GROQ_API_KEY")
@@ -141,12 +133,13 @@ def analyze_job_match(job_description: str):
     
     analysis_prompt = (
         "You are an expert Applicant Tracking System (ATS) and Technical Recruiter.\n"
-        "Analyze the candidate's resume context below against the provided Job Description.\n"
+        "Analyze the candidate's resume context below against the target Job Description and optional target skill filter.\n"
         "Provide:\n"
-        "1. **Match Score Percentage** (e.g., 85%)\n"
+        "1. **Match Score Percentage** (e.g., 88%)\n"
         "2. **Strong Alignment / Matching Skills**\n"
-        "3. **Identified Skill Gaps / Missing Requirements**\n"
-        "4. **Recommendation Summary**\n\n"
+        "3. **Skill Gaps / Missing Requirements**\n"
+        "4. **Interactive Skill Spotlight Evaluation** (How well the candidate fits the target skill if provided)\n\n"
+        f"Target Skill Focus: {target_skill if target_skill else 'General Alignment'}\n\n"
         f"Job Description:\n{job_description}\n\n"
         f"Candidate Resume Context:\n{context}"
     )

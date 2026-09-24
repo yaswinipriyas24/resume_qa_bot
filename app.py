@@ -2,7 +2,7 @@ import os
 import warnings
 import shutil
 import streamlit as st
-from backend import build_vector_store, get_qa_chain, analyze_job_match
+from backend import build_vector_store, get_conversational_qa_chain, analyze_job_match
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*is part of.*but not documented.*")
@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore", message=".*is part of.*but not documented.*")
 st.set_page_config(page_title="Advanced AI Resume & ATS Bot", page_icon="💼", layout="centered")
 
 st.title("💼 Advanced AI Resume & Portfolio System")
-st.write("Upload your documents, switch hiring personas, or run an ATS Job Description match!")
+st.write("Chat with conversation memory, switch personas, or run an interactive ATS gap-match!")
 
 # Sidebar for Multi-Document Upload & Settings
 with st.sidebar:
@@ -31,7 +31,6 @@ with st.sidebar:
                         f.write(uploaded_file.getbuffer())
                     
                     if file_path.endswith(".pdf"):
-                        # Safely overwrite temp_resume.pdf without throwing a FileExistsError
                         if os.path.exists("temp_resume.pdf"):
                             os.remove("temp_resume.pdf")
                         shutil.move(file_path, "temp_resume.pdf")
@@ -51,16 +50,19 @@ with st.sidebar:
     )
 
 # Navigation Tabs
-tab1, tab2 = st.tabs(["💬 Interactive Q&A Bot", "🎯 Job Description Gap-Matcher"])
+tab1, tab2 = st.tabs(["💬 Interactive Q&A Bot", "🎯 Interactive Skills & Gap-Matcher"])
 
 with tab1:
-    # Initialize Chat History
+    # Initialize simple string-based conversation history for safe embedding processing
+    if "chat_history_text" not in st.session_state:
+        st.session_state.chat_history_text = ""
+
     if "messages" not in st.session_state:
         st.session_state.messages = [
             {"role": "assistant", "content": "Hello! Ask me anything about the candidate's background or projects."}
         ]
 
-    # Display Chat History
+    # Display Chat History UI
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -88,10 +90,16 @@ with tab1:
                 response_sources = []
             else:
                 with st.spinner(f"Analyzing in {persona_mode}..."):
-                    qa_chain = get_qa_chain(persona_mode=persona_mode)
-                    result = qa_chain.invoke(user_query)
+                    qa_chain = get_conversational_qa_chain(persona_mode=persona_mode)
+                    
+                    # Pass chat history safely as a formatted text block
+                    result = qa_chain.invoke({
+                        "input": user_query,
+                        "chat_history": st.session_state.chat_history_text
+                    })
+                    
                     response_text = result["answer"]
-                    response_sources = result["source_documents"]
+                    response_sources = result.get("source_documents", [])
                     
                     st.markdown(response_text)
                     
@@ -106,6 +114,9 @@ with tab1:
                                     st.text(doc.page_content)
                                     st.divider()
                     
+        # Update text-based history log
+        st.session_state.chat_history_text += f"\nHuman: {user_query}\nAI: {response_text}\n"
+        
         st.session_state.messages.append({
             "role": "assistant", 
             "content": response_text,
@@ -113,23 +124,31 @@ with tab1:
         })
 
 with tab2:
-    st.header("🎯 ATS Job Matcher & Gap Analysis")
-    st.write("Paste a target Job Description below to evaluate your resume match score and missing skills.")
+    st.header("🎯 Interactive Skills & Job Gap-Matcher")
+    st.write("Paste a target Job Description and optionally specify a focal skill to analyze alignment.")
     
-    jd_input = st.text_area("Paste Job Description Here:", height=200)
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        jd_input = st.text_area("Paste Job Description Here:", height=180)
+    with col2:
+        target_skill_filter = st.selectbox(
+            "Interactive Skill Focus",
+            ["None (General Match)", "Python", "SQL", "Tableau / Power BI", "Machine Learning / NLP", "FastAPI / React"]
+        )
     
-    if st.button("Run ATS Match Analysis"):
+    if st.button("Run Gap-Match Analysis"):
         if not os.path.exists("./chroma_db"):
-            st.warning("Please upload and index your resume in the sidebar first!")
+            st.warning("Please upload and index your documents in the sidebar first!")
         elif not jd_input.strip():
             st.warning("Please enter a valid job description.")
         else:
-            with st.spinner("Evaluating candidate fit against Job Description..."):
-                analysis_report, jd_sources = analyze_job_match(jd_input)
-                st.markdown("### 📊 ATS Analysis Report")
+            skill_query = "" if "None" in target_skill_filter else target_skill_filter
+            with st.spinner("Evaluating candidate fit and skill alignment..."):
+                analysis_report, jd_sources = analyze_job_match(jd_input, target_skill=skill_query)
+                st.markdown("### 📊 Skill Gap & ATS Report")
                 st.markdown(analysis_report)
                 
-                with st.expander("🔍 View Matched Resume Chunks"):
+                with st.expander("🔍 View Relevant Resume Chunks"):
                     for i, doc in enumerate(jd_sources):
                         st.markdown(f"**Match Chunk {i+1}**")
                         st.text(doc.page_content)
