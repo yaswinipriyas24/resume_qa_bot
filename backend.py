@@ -1,4 +1,6 @@
 import os
+import re
+import textwrap
 import streamlit as st
 from operator import itemgetter
 from dotenv import load_dotenv
@@ -10,6 +12,7 @@ from langchain_groq import ChatGroq
 from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from fpdf import FPDF
 
 load_dotenv()
 
@@ -184,3 +187,40 @@ def tailor_resume_to_jd(job_description: str, target_skill: str = ""):
     
     response = llm.invoke(tailor_prompt)
     return response.content
+
+def generate_pdf_from_text(resume_text: str) -> bytes:
+    """Converts text to PDF by pre-wrapping strings in Python to bypass FPDF's fragile multi_cell algorithm."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("helvetica", size=10)
+    
+    # Standardize whitespace and remove markdown artifacts
+    resume_text = resume_text.replace('\r', '').replace('\t', '    ')
+    cleaned = resume_text.replace("**", "").replace("*", "").replace("`", "").replace("•", "-").replace("—", "-")
+    
+    # Encode safely, ignoring characters that don't fit in latin-1 to avoid crashes
+    safe_text = cleaned.encode('latin-1', 'ignore').decode('latin-1')
+    
+    for paragraph in safe_text.split('\n'):
+        line = paragraph.strip()
+        if not line:
+            pdf.ln(4)
+            continue
+            
+        if line.startswith("#"):
+            pdf.set_font("helvetica", style="B", size=12)
+            clean_header = line.lstrip("#").strip()
+            # Wrap header safely
+            header_lines = textwrap.wrap(clean_header, width=80, break_long_words=True)
+            for hl in header_lines:
+                pdf.cell(0, 6, text=hl, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("helvetica", size=10)
+        else:
+            # textwrap automatically handles word breaks and truncates oversized tokens natively in Python
+            wrapped_lines = textwrap.wrap(line, width=100, break_long_words=True)
+            for w_line in wrapped_lines:
+                # Bypassing multi_cell prevents the FPDF line-break crash entirely!
+                pdf.cell(0, 5, text=w_line, new_x="LMARGIN", new_y="NEXT")
+                
+    return bytes(pdf.output())

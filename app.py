@@ -2,7 +2,13 @@ import os
 import warnings
 import shutil
 import streamlit as st
-from backend import build_vector_store, get_conversational_qa_chain, analyze_job_match, tailor_resume_to_jd
+from backend import (
+    build_vector_store, 
+    get_conversational_qa_chain, 
+    analyze_job_match, 
+    tailor_resume_to_jd, 
+    generate_pdf_from_text
+)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*is part of.*but not documented.*")
@@ -10,7 +16,7 @@ warnings.filterwarnings("ignore", message=".*is part of.*but not documented.*")
 st.set_page_config(page_title="Advanced AI Resume & ATS Bot", page_icon="💼", layout="centered")
 
 st.title("💼 Advanced AI Resume & Portfolio System")
-st.write("Chat with conversation memory, switch personas, or run an interactive ATS gap-match & auto-tailor!")
+st.write("Chat with conversation memory, switch personas, or run an interactive ATS gap-match, edit live, and export to PDF!")
 
 # Sidebar for Multi-Document Upload & Settings
 with st.sidebar:
@@ -156,8 +162,8 @@ with tab2:
                 st.divider()
                 
         st.divider()
-        st.subheader("✨ Automatic Resume Tailor & Download")
-        st.write("Satisfied with the job target? Click below to generate an ATS-optimized version of your resume tailored precisely for this position.")
+        st.subheader("✨ Automatic Resume Tailor, Editor & PDF Export")
+        st.write("Click below to generate an ATS-optimized version of your resume. You can edit it live in the box below before downloading it directly as a PDF.")
         
         if st.button("🚀 Generate Tailored Resume"):
             with st.spinner("Rewriting and optimizing resume content for maximum ATS compatibility..."):
@@ -165,16 +171,24 @@ with tab2:
                     st.session_state["last_jd"], 
                     target_skill=st.session_state["last_skill"]
                 )
-                st.session_state["tailored_resume"] = tailored_resume_text
+                st.session_state["editable_resume"] = tailored_resume_text
                 st.success("Resume successfully tailored!")
                 
-        if "tailored_resume" in st.session_state:
-            st.markdown("### 📄 Tailored Resume Preview")
-            st.markdown(st.session_state["tailored_resume"])
+        if "editable_resume" in st.session_state:
+            st.markdown("### 📝 Live Editable Resume Box")
+            st.write("Make any manual tweaks, corrections, or keyword additions below:")
+            
+            st.session_state["editable_resume"] = st.text_area(
+                "Edit your tailored resume text:", 
+                value=st.session_state["editable_resume"], 
+                height=350
+            )
+            
+            pdf_bytes = generate_pdf_from_text(st.session_state["editable_resume"])
             
             st.download_button(
-                label="📥 Download Tailored Resume (.md / .txt)",
-                data=st.session_state["tailored_resume"],
-                file_name="tailored_resume_optimized.md",
-                mime="text/markdown"
+                label="📥 Download Tailored Resume as PDF (.pdf)",
+                data=pdf_bytes,
+                file_name="tailored_resume_optimized.pdf",
+                mime="application/pdf"
             )
